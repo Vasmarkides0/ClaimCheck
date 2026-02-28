@@ -51,7 +51,7 @@ def classify_source(url: str) -> int:
     return 3
 
 
-def search_web(query: str, num_results: int = 5) -> list:
+def search_web(query: str, num_results: int = 3) -> list:
     """Run one Google search via Serper.dev. Returns list of results."""
     response = requests.post(
         "https://google.serper.dev/search",
