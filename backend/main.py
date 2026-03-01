@@ -1,8 +1,9 @@
-import concurrent.futures
 import json
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
+import anthropic
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -10,10 +11,20 @@ from fastapi.responses import HTMLResponse
 from pdf_extractor import extract_text_from_pdf
 from claim_extractor import extract_claims
 from evidence_retriever import retrieve_evidence
-from scorer import score_claim
+from scorer import score_claim_with_claude
+
+
+def _read_key(name: str) -> str:
+    for line in open("/Users/vassilismarkides/Desktop/claimcheck/.env/keys"):
+        if line.startswith(name + "="):
+            return line.strip().split("=", 1)[1]
+    return None
+
+
+ANTHROPIC_API_KEY = _read_key("ANTHROPIC_API_KEY") or "YOUR_ANTHROPIC_API_KEY_HERE"
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,38 +36,254 @@ app.add_middleware(
 _BACKEND_DIR = os.path.dirname(__file__)
 DEMO_DIR = os.path.join(_BACKEND_DIR, "demo")
 
+# ---------------------------------------------------------------------------
+# Tool schemas exposed to the Claude agent
+# ---------------------------------------------------------------------------
+
+TOOLS = [
+    {
+        "name": "extract_text_from_pdf",
+        "description": "Extract raw text from a PDF file on disk.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the PDF file.",
+                }
+            },
+            "required": ["file_path"],
+        },
+    },
+    {
+        "name": "extract_claims",
+        "description": (
+            "Parse pitch-deck text and return a JSON object with a 'claims' array. "
+            "Each claim has: id, original_text, claim_type, search_queries."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Full text of the pitch deck."}
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "retrieve_evidence",
+        "description": (
+            "Run web searches for one claim and return a JSON array of evidence items "
+            "(title, snippet, url, source_tier, source_domain)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "claim_json": {
+                    "type": "string",
+                    "description": "JSON-encoded claim dict.",
+                }
+            },
+            "required": ["claim_json"],
+        },
+    },
+    {
+        "name": "score_claim",
+        "description": (
+            "Score one claim against its evidence. Returns a JSON dict with: "
+            "id, original_text, claim_type, score (0-100), verdict (green/amber/red), "
+            "summary, evidence_for, evidence_against, red_flags, follow_up_questions."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "claim_json": {
+                    "type": "string",
+                    "description": "JSON-encoded claim dict.",
+                },
+                "evidence_json": {
+                    "type": "string",
+                    "description": "JSON-encoded list of evidence dicts.",
+                },
+            },
+            "required": ["claim_json", "evidence_json"],
+        },
+    },
+    {
+        "name": "submit_results",
+        "description": (
+            "Call this once ALL claims have been scored to submit the final results "
+            "and end the pipeline."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "scored_claims_json": {
+                    "type": "string",
+                    "description": "JSON-encoded list of all scored claim dicts.",
+                }
+            },
+            "required": ["scored_claims_json"],
+        },
+    },
+]
+
+# ---------------------------------------------------------------------------
+# Tool dispatcher
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_tool(name: str, inputs: dict):
+    """Execute one tool call.
+
+    Returns (result_str, submitted_claims_or_None).
+    submitted_claims_or_None is only set when 'submit_results' is called.
+    """
+    try:
+        if name == "extract_text_from_pdf":
+            text = extract_text_from_pdf(inputs["file_path"])
+            return text, None
+
+        if name == "extract_claims":
+            result = extract_claims(inputs["text"])
+            return json.dumps(result), None
+
+        if name == "retrieve_evidence":
+            claim = json.loads(inputs["claim_json"])
+            evidence = retrieve_evidence(claim)
+            return json.dumps(evidence), None
+
+        if name == "score_claim":
+            claim = json.loads(inputs["claim_json"])
+            evidence = json.loads(inputs["evidence_json"])
+            result = score_claim_with_claude(claim, evidence)
+            return json.dumps(result), None
+
+        if name == "submit_results":
+            scored_claims = json.loads(inputs["scored_claims_json"])
+            return "Results submitted.", scored_claims
+
+        return f"Unknown tool: {name}", None
+
+    except Exception as exc:
+        return f"Error executing {name}: {exc}", None
+
+
+# ---------------------------------------------------------------------------
+# Agentic loop
+# ---------------------------------------------------------------------------
+
+
+def _run_agent(initial_message: str) -> list:
+    """Drive the Claude agent until it calls submit_results or stops.
+
+    Falls back to the scores collected from individual score_claim calls
+    if the agent ends without calling submit_results.
+    """
+    messages = [{"role": "user", "content": initial_message}]
+    final_claims = None
+    collected_scores: list[dict] = []  # fallback accumulator
+
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=8000,
+            tools=TOOLS,
+            messages=messages,
+        )
+
+        messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason == "end_turn":
+            break
+
+        if response.stop_reason != "tool_use":
+            break
+
+        tool_results = []
+        submitted = False
+
+        tool_blocks = [block for block in response.content if block.type == "tool_use"]
+
+        with ThreadPoolExecutor() as executor:
+            dispatch_results = list(
+                executor.map(lambda b: (b, *_dispatch_tool(b.name, b.input)), tool_blocks)
+            )
+
+        for block, result_str, claimed in dispatch_results:
+            # Collect individual score_claim outputs as a fallback
+            if block.name == "score_claim" and not result_str.startswith("Error"):
+                try:
+                    collected_scores.append(json.loads(result_str))
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            if claimed is not None:
+                final_claims = claimed
+                submitted = True
+
+            tool_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_str,
+                }
+            )
+
+        messages.append({"role": "user", "content": tool_results})
+
+        if submitted:
+            break
+
+    return final_claims if final_claims is not None else collected_scores
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
 
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(None), text: str = Form(None)):
-    # Station 1: extract text
-    if file is not None:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(await file.read())
-            tmp_path = tmp.name
-        try:
-            deck_text = extract_text_from_pdf(tmp_path)
-        finally:
+    tmp_path = None
+    try:
+        if file is not None:
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(await file.read())
+                tmp_path = tmp.name
+            initial_message = (
+                f"A startup pitch deck PDF has been saved to: {tmp_path}\n\n"
+                "Please verify all its claims by following this exact pipeline:\n"
+                "1. Call extract_text_from_pdf with the path above to get the text.\n"
+                "2. Call extract_claims on the text to identify all verifiable claims.\n"
+                "3. For EACH claim: call retrieve_evidence, then call score_claim with that claim and its evidence.\n"
+                "4. Once every claim is scored, call submit_results with the complete list of scored claim dicts.\n\n"
+                "Do not skip any claim. Where possible, call retrieve_evidence for multiple claims in parallel in a single response. Similarly, call score_claim for multiple claims in parallel once evidence is gathered."
+            )
+        elif text:
+            initial_message = (
+                f"Here is a startup pitch deck to verify:\n\n{text}\n\n"
+                "Please verify all its claims by following this exact pipeline:\n"
+                "1. Call extract_claims on the text above to identify all verifiable claims.\n"
+                "2. For EACH claim: call retrieve_evidence, then call score_claim with that claim and its evidence.\n"
+                "3. Once every claim is scored, call submit_results with the complete list of scored claim dicts.\n\n"
+                "Do not skip any claim. Where possible, call retrieve_evidence for multiple claims in parallel in a single response. Similarly, call score_claim for multiple claims in parallel once evidence is gathered."
+            )
+        else:
+            raise HTTPException(
+                status_code=400, detail="Provide either a PDF file or raw text."
+            )
+
+        scored_claims = _run_agent(initial_message)
+
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
-    elif text:
-        deck_text = text
-    else:
-        raise HTTPException(status_code=400, detail="Provide either a PDF file or raw text.")
 
-    # Station 2: extract verifiable claims
-    extraction = extract_claims(deck_text)
-    claims = extraction.get("claims", [])
+    if not scored_claims:
+        raise HTTPException(status_code=500, detail="Agent returned no scored claims.")
 
-    # Stations 3 + 4: retrieve evidence then score each claim
-    def process_claim(claim):
-        evidence = retrieve_evidence(claim)
-        return score_claim(claim, evidence)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        scored_claims = list(executor.map(process_claim, claims))
-
-    # Build summary
-    verdicts = [c["verdict"] for c in scored_claims]
-    scores = [c["score"] for c in scored_claims]
+    verdicts = [c.get("verdict", "amber") for c in scored_claims]
+    scores = [c.get("score", 0) for c in scored_claims]
     summary = {
         "total_claims": len(scored_claims),
         "verified": verdicts.count("green"),
@@ -210,7 +437,9 @@ async def get_report(demo_id: str = None):
     generate_report_html() directly or add a POST /report variant.
     """
     if demo_id is None:
-        raise HTTPException(status_code=400, detail="Provide ?demo_id=<id> as a query parameter.")
+        raise HTTPException(
+            status_code=400, detail="Provide ?demo_id=<id> as a query parameter."
+        )
     path = os.path.join(DEMO_DIR, f"cached_result_{demo_id}.json")
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail=f"Demo '{demo_id}' not found.")
