@@ -1,3 +1,4 @@
+import concurrent.futures
 import requests
 
 
@@ -75,16 +76,20 @@ def search_web(query: str, num_results: int = 3) -> list:
 
 
 def retrieve_evidence(claim: dict) -> list:
-    """For one claim, run all its search queries and combine results. Remove duplicates."""
-    all_evidence = []
+    """For one claim, run all its search queries in parallel and combine results. Remove duplicates."""
+    queries = claim.get("search_queries", [])
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(queries) or 1) as executor:
+        all_results = list(executor.map(search_web, queries))
+
     seen_urls = set()
-    for query in claim.get("search_queries", []):
-        results = search_web(query)
+    all_evidence = []
+    for results in all_results:
         for r in results:
             if r["url"] not in seen_urls:
                 seen_urls.add(r["url"])
                 all_evidence.append(r)
-    # Sort: most reliable sources first
+
     all_evidence.sort(key=lambda x: x["source_tier"])
     return all_evidence
 

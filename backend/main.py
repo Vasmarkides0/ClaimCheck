@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import os
 import tempfile
@@ -46,11 +47,12 @@ async def analyze(file: UploadFile = File(None), text: str = Form(None)):
     claims = extraction.get("claims", [])
 
     # Stations 3 + 4: retrieve evidence then score each claim
-    scored_claims = []
-    for claim in claims:
+    def process_claim(claim):
         evidence = retrieve_evidence(claim)
-        scored = score_claim(claim, evidence)
-        scored_claims.append(scored)
+        return score_claim(claim, evidence)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        scored_claims = list(executor.map(process_claim, claims))
 
     # Build summary
     verdicts = [c["verdict"] for c in scored_claims]

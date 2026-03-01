@@ -31,7 +31,9 @@ Assess this claim's credibility based on the evidence. Return ONLY valid JSON, n
         {{"text": "what contradicts the claim, citing specific data", "source_url": "URL"}}
     ],
     "red_flags": ["specific red flags like: no peer review, deprecated benchmark, cherry-picked metric, no public repo, superlative claim"],
-    "follow_up_questions": ["2-3 specific questions a VC should ask the founder"]
+    "follow_up_questions": ["2-3 specific questions a VC should ask the founder"],
+    "specific_numbers_verified": true or false,
+    "baseline_comparison_accurate": true or false
 }}
 
 RULES:
@@ -39,13 +41,15 @@ RULES:
 - Do NOT make up or hallucinate any sources
 - Be specific with numbers — don't say "the claim seems exaggerated", say "evidence shows X while they claim Y"
 - If there's insufficient evidence, say so clearly
-- Return a MAXIMUM of 3 red flags. Only list a red flag if you can point to a specific gap in the evidence provided. Do not invent red flags that are not supported by what you see above."""
+- Return a MAXIMUM of 3 red flags. Only list a red flag if you can point to a specific gap in the evidence provided. Do not invent red flags that are not supported by what you see above.
+- "specific_numbers_verified": set to true ONLY if the search results contain the EXACT numbers the startup claims (their own score, not just the baseline). If the startup claims "we achieve 0.89" and no source confirms 0.89, set to false.
+- "baseline_comparison_accurate": set to true if the competitor/baseline numbers cited in the claim match what the evidence shows. If the claim says "GPT-4 scores 84.7%" but evidence shows 86.02%, set to false."""
 
 
 def score_claim_with_claude(claim: dict, evidence: list) -> dict:
     """Get Claude's qualitative assessment of a claim."""
     evidence_text = ""
-    for i, e in enumerate(evidence[:10]):  # Limit to top 10 results
+    for i, e in enumerate(evidence[:10]):
         evidence_text += f"\n[Source {i+1}] {e['source_domain']} (Reliability: Tier {e['source_tier']})\n"
         evidence_text += f"Title: {e['title']}\n"
         evidence_text += f"Snippet: {e['snippet']}\n"
@@ -76,27 +80,24 @@ def score_claim_with_claude(claim: dict, evidence: list) -> dict:
 
 
 def calculate_score(assessment: dict, evidence: list) -> int:
-    """Deterministic formula. Same input = same score. Always."""
-    score = 50  # Start neutral
+    score = 50
 
-    # Count supporting evidence by tier
     for e in assessment.get("evidence_for", []):
         url = e.get("source_url", "")
-        tier = 3  # default
+        tier = 3
         for ev in evidence:
             if ev["url"] == url:
                 tier = ev["source_tier"]
                 break
         if tier == 1:
-            score += 15   # Academic/benchmark = strong support
+            score += 18
         elif tier == 2:
-            score += 10   # Reputable press = moderate support
+            score += 12
         elif tier == 3:
-            score += 3    # Company blog = weak support
+            score += 4
         elif tier == 4:
-            score += 1    # Social media = barely counts
+            score += 1
 
-    # Count contradicting evidence by tier
     for e in assessment.get("evidence_against", []):
         url = e.get("source_url", "")
         tier = 3
@@ -105,20 +106,25 @@ def calculate_score(assessment: dict, evidence: list) -> int:
                 tier = ev["source_tier"]
                 break
         if tier == 1:
-            score -= 20   # Academic contradiction = strong hit
+            score -= 30
         elif tier == 2:
-            score -= 12   # Press contradiction = moderate hit
+            score -= 18
         elif tier == 3:
-            score -= 5    # Blog contradiction = minor hit
+            score -= 8
         elif tier == 4:
-            score -= 2    # Social media = barely counts
+            score -= 3
 
-    # Red flags penalty
-    score -= len(assessment.get("red_flags", [])) * 5
+    num_flags = len(assessment.get("red_flags", []))
+    score -= num_flags * 8
 
-    # No evidence found at all = suspicious
-    if not assessment.get("evidence_for") and not assessment.get("evidence_against"):
+    if assessment.get("specific_numbers_verified", False):
+        score += 20
+
+    if assessment.get("baseline_comparison_accurate") is False:
         score -= 15
+
+    if not assessment.get("evidence_for") and not assessment.get("evidence_against"):
+        score -= 20
 
     return max(0, min(100, score))
 
