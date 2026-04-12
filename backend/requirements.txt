@@ -4,3 +4,4 @@ anthropic
 pymupdf
 requests
 python-dotenv
+python-multipart
