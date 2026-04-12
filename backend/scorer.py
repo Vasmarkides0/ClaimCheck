@@ -1,15 +1,8 @@
 import anthropic
 import json
+import os
 
-
-def _read_key(name: str) -> str:
-    for line in open("/Users/vassilismarkides/Desktop/claimcheck/.env/keys"):
-        if line.startswith(name + "="):
-            return line.strip().split("=", 1)[1]
-    return None
-
-
-ANTHROPIC_API_KEY = _read_key("ANTHROPIC_API_KEY") or "YOUR_ANTHROPIC_API_KEY_HERE"
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 

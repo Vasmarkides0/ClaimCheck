@@ -2,14 +2,9 @@ import concurrent.futures
 import requests
 
 
-def _read_key(name: str) -> str:
-    for line in open("/Users/vassilismarkides/Desktop/claimcheck/.env/keys"):
-        if line.startswith(name + "="):
-            return line.strip().split("=", 1)[1]
-    return None
+import os
 
-
-SERPER_API_KEY = _read_key("SERPER_API_KEY")
+SERPER_API_KEY = os.environ.get("SERPER_API_KEY")
 
 # How reliable is each source? Tier 1 = most reliable, Tier 4 = least
 SOURCE_TIERS = {
