@@ -33,10 +33,9 @@ Verdicts: Green (70+), Amber (40-69), Red (below 40).
 **backend/** — main.py (FastAPI server + Claude agentic loop), pdf_extractor.py (PDF text extraction), claim_extractor.py (claim identification), evidence_retriever.py (web search via Serper API), scorer.py (hybrid scoring logic), demo/ (cached demo results), prompts/ (extraction.txt, scoring.txt)
 
 **frontend/** — React frontend
-
 ## Getting started
 
-**1. Clone the repo**
+**Backend**
 
 `git clone https://github.com/Vasmarkides0/ClaimCheck`
 
@@ -44,28 +43,19 @@ Verdicts: Green (70+), Amber (40-69), Red (below 40).
 
 `pip install fastapi uvicorn anthropic pymupdf requests python-dotenv`
 
-**2. Add API keys to backend/.env/keys**
+Add your API keys to backend/.env/keys:
 
 `ANTHROPIC_API_KEY=your_key_here`
 
 `SERPER_API_KEY=your_key_here`
 
-**3. Run the backend**
-
-`cd backend`
-
 `uvicorn main:app --reload --port 8000`
 
-Open the frontend preview URL in a separate browser tab.
+**Frontend**
 
-## API
-
-`POST /analyze` — upload PDF or raw text, returns scored claims
-
-`GET /demo/{id}` — returns cached demo result
-
-`GET /report?demo_id={id}` — returns styled HTML report
+The frontend was built with Lovable and connects to the backend API. See the demo on [LinkedIn](https://www.linkedin.com/in/vasilismarkides).
 
 ## Built at
 
 UCL AI Festival Hackathon 2026. 24 hours. Vasilis Markides and Miguel Landa.
+
