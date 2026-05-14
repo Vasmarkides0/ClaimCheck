@@ -31,7 +31,6 @@ Verdicts: Green (70+), Amber (40-69), Red (below 40).
 ## Project structure
 
 ​```
-
 backend/
   main.py                 — FastAPI server + Claude agentic loop
   pdf_extractor.py        — PDF text extraction
@@ -43,8 +42,7 @@ backend/
     extraction.txt
     scoring.txt
 frontend/                 — React frontend
-
-```
+​```
 
 ## Getting started
 
