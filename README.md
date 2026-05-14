@@ -30,53 +30,41 @@ Verdicts: Green (70+), Amber (40-69), Red (below 40).
 
 ## Project structure
 
-​```
-backend/
-  main.py                 — FastAPI server + Claude agentic loop
-  pdf_extractor.py        — PDF text extraction
-  claim_extractor.py      — claim identification
-  evidence_retriever.py   — web search via Serper API
-  scorer.py               — hybrid scoring logic
-  demo/                   — cached demo results
-  prompts/
-    extraction.txt
-    scoring.txt
-frontend/                 — React frontend
-​```
+**backend/** — main.py (FastAPI server + Claude agentic loop), pdf_extractor.py (PDF text extraction), claim_extractor.py (claim identification), evidence_retriever.py (web search via Serper API), scorer.py (hybrid scoring logic), demo/ (cached demo results), prompts/ (extraction.txt, scoring.txt)
+
+**frontend/** — React frontend
 
 ## Getting started
 
-1. Clone the repo
+**1. Clone the repo**
 
-​```
-git clone https://github.com/Vasmarkides0/ClaimCheck
-cd ClaimCheck/backend
-pip install fastapi uvicorn anthropic pymupdf requests python-dotenv
-​```
+`git clone https://github.com/Vasmarkides0/ClaimCheck`
 
-2. Add API keys to backend/.env/keys
+`cd ClaimCheck/backend`
 
-​```
-ANTHROPIC_API_KEY=your_key_here
-SERPER_API_KEY=your_key_here
-​```
+`pip install fastapi uvicorn anthropic pymupdf requests python-dotenv`
 
-3. Run the backend
+**2. Add API keys to backend/.env/keys**
 
-​```
-cd backend
-uvicorn main:app --reload --port 8000
-​```
+`ANTHROPIC_API_KEY=your_key_here`
+
+`SERPER_API_KEY=your_key_here`
+
+**3. Run the backend**
+
+`cd backend`
+
+`uvicorn main:app --reload --port 8000`
 
 Open the frontend preview URL in a separate browser tab.
 
 ## API
 
-​```
-/analyze (POST)            — upload PDF or raw text, returns scored claims
-/demo/{id} (GET)           — returns cached demo result
-/report?demo_id={id} (GET) — returns styled HTML report
-​```
+`POST /analyze` — upload PDF or raw text, returns scored claims
+
+`GET /demo/{id}` — returns cached demo result
+
+`GET /report?demo_id={id}` — returns styled HTML report
 
 ## Built at
 
