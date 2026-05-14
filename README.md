@@ -42,7 +42,7 @@ backend/
     extraction.txt
     scoring.txt
 frontend/                 — React frontend
-​```
+```
 
 ## Getting started
 
